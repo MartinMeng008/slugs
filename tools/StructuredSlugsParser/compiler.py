@@ -190,9 +190,11 @@ def flatten_as_much_as_possible(tree):
 # =====================================================
 def printTree(tree,depth=0):
     if isinstance(tree,str):
-        print >>sys.stderr," "*depth+tree
+        # print >>sys.stderr," "*depth+tree
+        print(" "*depth, tree)
     else:
-        print >>sys.stderr," "*depth+tree[0]
+        # print >>sys.stderr," "*depth+tree[0]
+        print(" "*depth, tree)
         for a in tree[1:]:
             printTree(a,depth+2)
 
@@ -625,6 +627,189 @@ def performConversion(inputFile,thoroughly):
             print("")
         
 
+def get_asts(inputFile, thoroughly = False):
+    specFile = open(inputFile,"r")
+    mode = ""
+    lines = {"[ENV_TRANS]":[],"[ENV_INIT]":[],"[INPUT]":[],"[OUTPUT]":[],"[SYS_TRANS]":[],"[SYS_INIT]":[],"[ENV_LIVENESS]":[],"[SYS_LIVENESS]":[],"[OBSERVABLE_INPUT]":[],"[UNOBSERVABLE_INPUT]":[],"[CONTROLLABLE_INPUT]":[] }
+
+    for line in specFile.readlines():
+        line = line.strip()
+        if line.startswith("["):
+            mode = line
+            # if not mode in lines:
+            #    lines[mode] = []
+        else:
+            if mode=="" and line.startswith("#"):
+                # Initial comments
+                pass
+            elif mode!="":
+                lines[mode].append(line)
+
+    specFile.close()
+
+    # ---------------------------------------    
+    # Reparse input lines
+    # Create information along the way that
+    # encodes the possible values
+    # ---------------------------------------    
+    translatedIOLines = {"[INPUT]":[],"[OUTPUT]":[],"[OBSERVABLE_INPUT]":[],"[UNOBSERVABLE_INPUT]":[],"[CONTROLLABLE_INPUT]":[]}
+    for variableType in ["[INPUT]","[OUTPUT]","[OBSERVABLE_INPUT]","[UNOBSERVABLE_INPUT]","[CONTROLLABLE_INPUT]"]: 
+        for line in lines[variableType]:
+            if line=="" or line.startswith("#"):
+                translatedIOLines[variableType].append(line.strip())
+            elif "'" in line:
+                print("Error with atomic signal name "+line+": the name must not contain any \"'\" characters",file=sys.stderr)
+                raise Exception("Translation error")
+            elif "@" in line:
+                print("Error with atomic signal name "+line+": the name must not contain any \"@\" characters",file=sys.stderr)
+                raise Exception("Translation error")
+            elif ":" in line:
+                parts = line.split(":")
+                parts = [a.strip() for a in parts]
+                if len(parts)!=2:
+                    print("Error reading line '"+line+"' in section "+variableType+": Too many ':'s!",file=sys.stderr)
+                    raise Exception("Failed to translate file.")
+                parts2 = parts[1].split("...")
+                if len(parts2)!=2:
+                    print("Error reading line '"+line+"' in section "+variableType+": Syntax should be name:from...to, where the latter two are numbers",file=sys.stderr)
+                    raise Exception("Failed to translate file.")
+                try:
+                    minValue = int(parts2[0])
+                    maxValue = int(parts2[1])
+                except ValueError:
+                    print("Error reading line '"+line+"' in section "+variableType+": the minimal and maximal values are not given as numbers",file=sys.stderr)
+                    raise Exception("Failed to translate file.")
+                if minValue>maxValue:
+                    print("Error reading line '"+line+"' in section "+variableType+": the minimal value should be smaller than the maximum one (or at least equal)",file=sys.stderr)
+                    raise Exception("Failed to translate file.")
+                
+                # Fill the dictionaries numberAPLimits, translatedNames with information
+                variable = parts[0]
+                numberAPs.append(parts[0])
+                numberAPs.append(parts[0]+"'")
+                numberAPLimits[parts[0]] = (minValue,maxValue)
+                nofBits = 0
+                while (2**nofBits <= (maxValue-minValue)):
+                    nofBits += 1
+                numberAPNofBits[variable] = nofBits
+                # Translate name into bits in a way such that the first bit carries not only the original name, but also min and max information
+                translatedNames[parts[0]] = [parts[0]+"@"+str(i)+("."+str(minValue)+"."+str(maxValue) if i==0 else "") for i in range(0,nofBits)]
+                translatedIOLines[variableType] = translatedIOLines[variableType] + translatedNames[parts[0]]
+                booleanAPs.extend(translatedNames[parts[0]])
+
+                # Define limits
+                limitDiff = maxValue - minValue + 1 # +1 because the range is inclusive 
+                if (2**numberAPNofBits[variable]) != limitDiff:
+
+                    propertyDestination = "ENV" if variableType.endswith("INPUT]") else "SYS"
+                    # Init constraint
+                    tokens = ["0"]
+                    for i in range(0,numberAPNofBits[variable]):
+                        if 2**i & limitDiff:
+                            tokens = ["| !",translatedNames[variable][i]]+tokens
+                        else:
+                            tokens = ["& !",translatedNames[variable][i]]+tokens
+                    lines["["+propertyDestination+"_INIT]"].append("## Variable limits: "+str(minValue)+"<="+variable+"<="+str(maxValue))
+                    lines["["+propertyDestination+"_INIT]"].append(" ".join(tokens))
+
+                    # Transition constraint for previous state -- only if using the "--thorougly mode"
+                    if thoroughly:
+                        lines["["+propertyDestination+"_TRANS]"].append("## Variable limits: "+str(minValue)+"<="+variable+"<="+str(maxValue))
+                        lines["["+propertyDestination+"_TRANS]"].append(" ".join(tokens))
+
+                    # Trans constraint for next states
+                    tokens = ["0"]
+                    for i in range(0,numberAPNofBits[variable]):
+                        if 2**i & limitDiff:
+                            tokens = ["| !",translatedNames[variable][i]+"'"]+tokens
+                        else:
+                            tokens = ["& !",translatedNames[variable][i]+"'"]+tokens
+                    lines["["+propertyDestination+"_TRANS]"].append("## Variable limits: "+str(minValue)+"<="+variable+"'<="+str(maxValue))
+                    lines["["+propertyDestination+"_TRANS]"].append(" ".join(tokens))
+
+            else:
+                # A "normal" atomic proposition
+                line = line.strip()
+                booleanAPs.append(line)
+                booleanAPs.append(line+"'")
+                translatedIOLines[variableType].append(line)
+
+    # ---------------------------------------    
+    # Output new input/output lines
+    # ---------------------------------------  
+    vars = {}  
+    for variableType in ["[INPUT]","[OUTPUT]","[OBSERVABLE_INPUT]","[UNOBSERVABLE_INPUT]","[CONTROLLABLE_INPUT]"]: 
+        if len(translatedIOLines[variableType])>0:
+            vars[variableType] = []
+            for a in translatedIOLines[variableType]:
+                if (len(a.strip())==0) or a.strip()[0:1] == "#":
+                    # print(a)
+                    pass
+                else:
+                    vars[variableType].append(a)
+            # print("")
+
+    # ---------------------------------------    
+    # Go through the properties and translate
+    # ---------------------------------------  
+    asts = {}  
+    for propertyType in ["[ENV_TRANS]","[ENV_INIT]","[SYS_TRANS]","[SYS_INIT]","[ENV_LIVENESS]","[SYS_LIVENESS]"]:
+    # for propertyType in ["[ENV_TRANS]"]:
+        asts[propertyType] = []
+        if len(lines[propertyType])>0:
+            # print(propertyType)
+
+            # Test for conformance with recursive definition
+            for a in lines[propertyType]:
+                # print >>sys.stderr, a.strip().split(" ")
+                if (len(a.strip())==0) or a.strip()[0:1] == "#":
+                    # print(a)
+                    pass
+                else:
+                    (isSlugsFormula,reasonForNotBeingASlugsFormula) = isValidRecursiveSlugsProperty(a.strip().split(" "))
+                    # if isSlugsFormula:
+                    #     print(a)
+                    # else:
+                    # print >>sys.stderr,a
+                    # Try to parse!
+                    tree = parseLTL(a,reasonForNotBeingASlugsFormula)            
+                    # printTree(tree)
+                    asts[propertyType].append(tree)
+                    # currentLine = translateToSlugsFormat(tree)
+                    # print(currentLine)
+            # print("")
+    return vars, asts
+
+def clear_file(f: str):
+    """Clear the file"""
+    fid = open(f, "w")
+    fid.write('')
+    fid.close()
+
+def asts_to_slugsin(vars: dict, asts: dict, filename: str) -> None:
+    """Produce slugsin file from ASTs"""
+    clear_file(filename)
+    fid = open(filename, 'a')
+
+    for variableType in ["[INPUT]","[OUTPUT]","[OBSERVABLE_INPUT]","[UNOBSERVABLE_INPUT]","[CONTROLLABLE_INPUT]"]: 
+        if variableType in vars.keys():
+            fid.write(variableType + '\n')
+            for a in vars[variableType]:
+                fid.write(a + '\n')
+            fid.write("\n")
+
+    # ---------------------------------------    
+    # Go through the properties and translate
+    # ---------------------------------------    
+    for propertyType in ["[ENV_TRANS]","[ENV_INIT]","[SYS_TRANS]","[SYS_INIT]","[ENV_LIVENESS]","[SYS_LIVENESS]"]:
+        if propertyType in asts.keys():
+            fid.write(propertyType + '\n')
+
+            # Test for conformance with recursive definition
+            for ast in asts[propertyType]:
+                currentLine = translateToSlugsFormat(ast)
+                fid.write(currentLine + '\n')
+            fid.write("\n")
 
 
 # ==================================
