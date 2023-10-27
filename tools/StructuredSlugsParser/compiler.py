@@ -212,7 +212,8 @@ def parseLTL(ltlTxt,reasonForNotBeingASlugsFormula):
     except p.ParseErrors as exception:
         for t,e in exception.errors:
             if t[0] == p.EOF:
-                print >>sys.stderr, "Formula end not expected here"
+                # print >>sys.stderr, "Formula end not expected here"
+                print("This is an error message.", file=sys.stderr)
                 continue
 
             found = repr(t[0])
@@ -780,6 +781,98 @@ def get_asts(inputFile, thoroughly = False):
             # print("")
     return vars, asts
 
+def list2dict(ls: list) -> dict:
+    dic = {}
+    for name in ls:
+        dic[name] = []
+    return dic
+
+def get_asts_from_structuredslugsplus(inputFile, thoroughly = False):
+    """Parse spec in structuredslugsplus format to get ASTs"""
+    specFile = open(inputFile,"r")
+    mode = ""
+    properties = ["[ENV_TRANS]", "[ENV_INIT]", "[INPUT]", "[OUTPUT]", "[SYS_TRANS]", "[SYS_INIT]", "[ENV_LIVENESS]", "[SYS_LIVENESS]", "[OBSERVABLE_INPUT]", "[UNOBSERVABLE_INPUT]", "[CONTROLLABLE_INPUT]", "[ENV_TRANS_HARD]", "[SYS_TRANS_HARD]", "[CHANGE_CONS]", "[NOT_ALLOWED_REPAIR]"]
+    variable_types = ["[INPUT]","[OUTPUT]", "[OBSERVABLE_INPUT]","[UNOBSERVABLE_INPUT]","[CONTROLLABLE_INPUT]"]
+    property_types = ["[ENV_TRANS]", "[ENV_INIT]", "[SYS_TRANS]", "[SYS_INIT]", "[ENV_LIVENESS]", "[SYS_LIVENESS]", "[ENV_TRANS_HARD]", "[SYS_TRANS_HARD]", "[CHANGE_CONS]", "[NOT_ALLOWED_REPAIR]"]
+    lines = list2dict(properties)
+    for line in specFile.readlines():
+        line = line.strip()
+        if line.startswith("["):
+            mode = line
+            # if not mode in lines:
+            #    lines[mode] = []
+        else:
+            if mode=="" and line.startswith("#"):
+                # Initial comments
+                pass
+            elif mode!="":
+                lines[mode].append(line)
+
+    specFile.close()
+    # return lines
+
+    # ---------------------------------------    
+    # Reparse input lines
+    # Create information along the way that
+    # encodes the possible values
+    # ---------------------------------------  
+    translatedIOLines = list2dict(variable_types)
+    for variableType in variable_types: 
+        for line in lines[variableType]:
+            if line=="" or line.startswith("#"):
+                translatedIOLines[variableType].append(line.strip())
+            elif "'" in line:
+                print("Error with atomic signal name "+line+": the name must not contain any \"'\" characters",file=sys.stderr)
+                raise Exception("Translation error")
+            elif "@" in line:
+                print("Error with atomic signal name "+line+": the name must not contain any \"@\" characters",file=sys.stderr)
+                raise Exception("Translation error")
+            else:
+                # A "normal" atomic proposition
+                line = line.strip()
+                booleanAPs.append(line)
+                booleanAPs.append(line+"'")
+                translatedIOLines[variableType].append(line)
+
+    # ---------------------------------------    
+    # Output new input/output lines
+    # ---------------------------------------  
+    vars = {}  
+    for variableType in variable_types:
+        if len(translatedIOLines[variableType])>0:
+            vars[variableType] = []
+            for a in translatedIOLines[variableType]:
+                if (len(a.strip())==0) or a.strip()[0:1] == "#":
+                    pass
+                else:
+                    vars[variableType].append(a)
+
+    # ---------------------------------------    
+    # Go through the properties and translate
+    # ---------------------------------------  
+    asts = {}  
+    for propertyType in property_types:
+        # print(propertyType)
+        asts[propertyType] = []
+        if len(lines[propertyType])>0:
+            for a in lines[propertyType]:
+                if (len(a.strip())==0) or a.strip()[0:1] == "#":
+                    pass
+                else:
+                    (isSlugsFormula,reasonForNotBeingASlugsFormula) = isValidRecursiveSlugsProperty(a.strip().split(" "))
+                    # if isSlugsFormula:
+                    #     print(a)
+                    # else:
+                    # print >>sys.stderr,a
+                    # Try to parse!
+                    tree = parseLTL(a,reasonForNotBeingASlugsFormula)            
+                    # printTree(tree)
+                    asts[propertyType].append(tree)
+                    # currentLine = translateToSlugsFormat(tree)
+                    # print(currentLine)
+            # print("")
+    return vars, asts
+
 def clear_file(f: str):
     """Clear the file"""
     fid = open(f, "w")
@@ -791,7 +884,10 @@ def asts_to_slugsin(vars: dict, asts: dict, filename: str) -> None:
     clear_file(filename)
     fid = open(filename, 'a')
 
-    for variableType in ["[INPUT]","[OUTPUT]","[OBSERVABLE_INPUT]","[UNOBSERVABLE_INPUT]","[CONTROLLABLE_INPUT]"]: 
+    variable_types = ["[INPUT]","[OUTPUT]","[OBSERVABLE_INPUT]","[UNOBSERVABLE_INPUT]","[CONTROLLABLE_INPUT]"]
+    property_types = ["[ENV_TRANS]","[ENV_INIT]","[SYS_TRANS]","[SYS_INIT]","[ENV_LIVENESS]","[SYS_LIVENESS]"]
+
+    for variableType in variable_types: 
         if variableType in vars.keys():
             fid.write(variableType + '\n')
             for a in vars[variableType]:
@@ -801,12 +897,17 @@ def asts_to_slugsin(vars: dict, asts: dict, filename: str) -> None:
     # ---------------------------------------    
     # Go through the properties and translate
     # ---------------------------------------    
-    for propertyType in ["[ENV_TRANS]","[ENV_INIT]","[SYS_TRANS]","[SYS_INIT]","[ENV_LIVENESS]","[SYS_LIVENESS]"]:
-        if propertyType in asts.keys():
+    for propertyType in property_types:
+        """Assume we don't need to write [CHANGE_CONS] and [NOT_ALLOWED_REPAIR]"""
+        if propertyType in asts:
             fid.write(propertyType + '\n')
-
-            # Test for conformance with recursive definition
-            for ast in asts[propertyType]:
+            asts_list = []
+            if propertyType == '[ENV_TRANS]' or propertyType == '[SYS_TRANS]':
+                propertyType_inner = propertyType[1:-1]
+                asts_list = asts[propertyType] + asts[f'[{propertyType_inner}_HARD]']
+            else:
+                asts_list = asts[propertyType]
+            for ast in asts_list:
                 currentLine = translateToSlugsFormat(ast)
                 fid.write(currentLine + '\n')
             fid.write("\n")
