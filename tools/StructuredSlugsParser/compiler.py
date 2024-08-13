@@ -791,9 +791,9 @@ def get_asts_from_structuredslugsplus(inputFile, thoroughly = False):
     """Parse spec in structuredslugsplus format to get ASTs"""
     specFile = open(inputFile,"r")
     mode = ""
-    properties = ["[ENV_TRANS]", "[ENV_INIT]", "[INPUT]", "[OUTPUT]", "[SYS_TRANS]", "[SYS_INIT]", "[ENV_LIVENESS]", "[SYS_LIVENESS]", "[OBSERVABLE_INPUT]", "[UNOBSERVABLE_INPUT]", "[CONTROLLABLE_INPUT]", "[ENV_TRANS_HARD]", "[SYS_TRANS_HARD]", "[CHANGE_CONS]", "[NOT_ALLOWED_REPAIR]"]
+    properties = ["[ENV_TRANS]", "[ENV_INIT]", "[INPUT]", "[OUTPUT]", "[SYS_TRANS]", "[SYS_INIT]", "[ENV_LIVENESS]", "[SYS_LIVENESS]", "[OBSERVABLE_INPUT]", "[UNOBSERVABLE_INPUT]", "[CONTROLLABLE_INPUT]", "[ENV_TRANS_HARD]", "[SYS_TRANS_HARD]", "[CHANGE_CONS]", "[NOT_ALLOWED_REPAIR]", "[CHANGE_REPAIR_CONS]"]
     variable_types = ["[INPUT]","[OUTPUT]", "[OBSERVABLE_INPUT]","[UNOBSERVABLE_INPUT]","[CONTROLLABLE_INPUT]"]
-    property_types = ["[ENV_TRANS]", "[ENV_INIT]", "[SYS_TRANS]", "[SYS_INIT]", "[ENV_LIVENESS]", "[SYS_LIVENESS]", "[ENV_TRANS_HARD]", "[SYS_TRANS_HARD]", "[CHANGE_CONS]", "[NOT_ALLOWED_REPAIR]"]
+    property_types = ["[ENV_TRANS]", "[ENV_INIT]", "[SYS_TRANS]", "[SYS_INIT]", "[ENV_LIVENESS]", "[SYS_LIVENESS]", "[ENV_TRANS_HARD]", "[SYS_TRANS_HARD]", "[CHANGE_CONS]", "[NOT_ALLOWED_REPAIR]", "[CHANGE_REPAIR_CONS]"]
     lines = list2dict(properties)
     for line in specFile.readlines():
         line = line.strip()
@@ -832,6 +832,7 @@ def get_asts_from_structuredslugsplus(inputFile, thoroughly = False):
                 line = line.strip()
                 booleanAPs.append(line)
                 booleanAPs.append(line+"'")
+                booleanAPs.append(line+"''")
                 translatedIOLines[variableType].append(line)
 
     # ---------------------------------------    
